@@ -44,3 +44,5 @@ htmlcov/
 
 # Build artifacts
 *.pyc
+
+p8.md
