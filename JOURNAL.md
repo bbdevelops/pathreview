@@ -22,18 +22,17 @@ I selected this issue because it aligns well with my current comfort level in Py
 
 ## Week 8 — Reproduction & solution planning
 
-**Reproduction commit link:** [link to commit documenting the reproduced issue]
+**Reproduction commit link:** https://github.com/bbdevelops/pathreview/commit/c87b97f95f7421d3f614d1accbeac4cbf3ea5f16
 
 **Reproduction summary:**
-[1–2 sentences: How did you reproduce the issue? What did you observe?]
+Ran `scripts/reproduce_issue_43.py`, which drives `Orchestrator.run()` twice for the same `profile_id` (README-only, then resume-only) against an in-memory fake Redis. After run 2, the persisted session state still contained `readme_scorer` from run 1 — confirming stale state leaks across reviews because `run()` merges new results onto prior state (`agent/orchestrator.py:66`) and re-keys on `profile_id`. Further code review found a second stale-data path: the in-memory `ContextManager` is instantiated once per Orchestrator (`:29`) rather than per review, so `cached_results` accumulates and `market_analyzer`'s constant input serves the prior run's result.
 
-**PLAN.md link:** [link to PLAN.md in your fork]
+**PLAN.md link:** https://github.com/bbdevelops/pathreview/blob/fix/43-agent-session-state-not-cleared/PLAN.md
 
 **Walkthrough video (recommended):** [link to your Loom video, ≤2 min — recommended, not graded]
 
 **Blockers or open questions:**
-[Anything you're still uncertain about going into Week 9, or leave blank]
-
+The fix must clear **both** cache layers — the Redis `SessionStore` and the in-memory `ContextManager` (`orchestrator.py:29`/`:75`, with `market_analyzer` at `:130`); a Redis-only fix is partial. Also confirm whether wiring `Orchestrator` into the production review pipeline (`core/services/review_service.py::_run_agent_orchestration` is currently a placeholder) is in scope for #43 — assuming not; the fix is verified via the repro script and a new unit test.
 
 ---
 
