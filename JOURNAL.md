@@ -29,8 +29,6 @@ Ran `scripts/reproduce_issue_43.py`, which drives `Orchestrator.run()` twice for
 
 **PLAN.md link:** https://github.com/bbdevelops/pathreview/blob/fix/43-agent-session-state-not-cleared/PLAN.md
 
-**Walkthrough video (recommended):** [link to your Loom video, ≤2 min — recommended, not graded]
-
 **Blockers or open questions:**
 The fix must clear **both** cache layers — the Redis `SessionStore` and the in-memory `ContextManager` (`orchestrator.py:29`/`:75`, with `market_analyzer` at `:130`); a Redis-only fix is partial. Also confirm whether wiring `Orchestrator` into the production review pipeline (`core/services/review_service.py::_run_agent_orchestration` is currently a placeholder) is in scope for #43 — assuming not; the fix is verified via the repro script and a new unit test.
 
