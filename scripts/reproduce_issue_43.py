@@ -1,7 +1,17 @@
 """Standalone reproduction script for Issue #43: Agent session state not cleared between reviews.
 
-This script demonstrates how Orchestrator reuses `profile_id` as the session key,
-causing stale tool execution results from prior reviews to leak into subsequent review sessions.
+The stale-state leak has TWO independent layers, both reproduced here:
+
+  Layer 1 - SessionStore (Redis): Orchestrator.run() loads prior state keyed by
+      `profile_id` and merges the new run's results on top of it, so tool results
+      from an earlier review that aren't recomputed survive into later reviews.
+
+  Layer 2 - ContextManager (in-memory): the ContextManager is created once per
+      Orchestrator instance rather than per review, so (a) `cached_results`
+      accumulates every prior review's results, and (b) `market_analyzer` is
+      always called with the constant input {"detected_skills": {}}, so its
+      memoization key never changes and later reviews get a stale cache hit
+      instead of a fresh execution.
 """
 
 import importlib.util
@@ -40,7 +50,7 @@ class FakeRedis:
 
 
 class DummyTool:
-    """Dummy tool for orchestrator execution."""
+    """Dummy tool that returns constant data for orchestrator execution."""
 
     def __init__(self, name: str, mock_data: dict) -> None:
         self.name = name
@@ -48,6 +58,34 @@ class DummyTool:
 
     def execute(self, tool_input: dict) -> dict:
         return self.mock_data
+
+
+class CountingTool:
+    """Spy tool that records how many times it actually executed.
+
+    Used to detect ContextManager cache hits: if execute() is not called on a
+    subsequent run, the orchestrator served a stale memoized result instead of
+    recomputing. Returns the current call number so the stale value is visible.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.calls = 0
+
+    def execute(self, tool_input: dict) -> dict:
+        self.calls += 1
+        return {
+            "call_number": self.calls,
+            "detected_skills_seen": tool_input.get("detected_skills"),
+        }
+
+
+def _has_tool_result(cached_results: dict, tool_name: str) -> bool:
+    """Return True if cached_results holds a result for tool_name.
+
+    ContextManager keys are formatted as '<tool_name>:<input_hash>'.
+    """
+    return any(key.startswith(f"{tool_name}:") for key in cached_results)
 
 
 def main() -> int:
@@ -59,9 +97,12 @@ def main() -> int:
     fake_redis = FakeRedis()
     session_store = SessionStore(fake_redis)  # type: ignore[arg-type]  # in-memory test double
 
+    # market_analyzer is a spy so we can detect a stale ContextManager cache hit.
+    market_analyzer = CountingTool("market_analyzer")
     tools = {
         "readme_scorer": DummyTool("readme_scorer", {"score": 95, "feedback": "Great README"}),
         "skill_extractor": DummyTool("skill_extractor", {"skills": ["Python", "FastAPI"]}),
+        "market_analyzer": market_analyzer,
     }
 
     orchestrator = Orchestrator(tools=tools, session_store=session_store)
@@ -75,8 +116,10 @@ def main() -> int:
     print("Run 1 Tool Results:", result_1["tool_results"])
     session_state_after_run1 = session_store.get(profile_id)
     print("SessionStore state after Run 1:", session_state_after_run1)
+    print("market_analyzer executions after Run 1:", market_analyzer.calls)
     assert session_state_after_run1 is not None, "Run 1 should persist session state"
     assert "readme_scorer" in session_state_after_run1, "Run 1 should store readme_scorer result"
+    assert market_analyzer.calls == 1, "Run 1 should execute market_analyzer once"
 
     # 3. Run 2: SAME user submits a subsequent review with RESUME only (no README content)
     print("\n--- RUN 2: Subsequent review request with RESUME content only (No README) ---")
@@ -88,30 +131,55 @@ def main() -> int:
     print("Run 2 Tool Results (from execution plan):", result_2["tool_results"])
     session_state_after_run2 = session_store.get(profile_id)
     print("SessionStore state after Run 2:", session_state_after_run2)
+    print("Run 2 cached_results keys:", list(result_2["cached_results"].keys()))
+    print("market_analyzer executions after Run 2:", market_analyzer.calls)
     assert session_state_after_run2 is not None, "Run 2 should persist session state"
 
-    # 4. Check for bug condition
+    # 4. Check for bug conditions across BOTH caching layers
     print("\n" + "=" * 60)
-    print("ANALYSIS OF SESSION STORE STATE:")
+    print("ANALYSIS OF STALE STATE (two layers):")
     print("=" * 60)
 
-    if "readme_scorer" in session_state_after_run2:
-        print("[BUG REPRODUCED SUCCESSFULLY]")
-        print("Stale result 'readme_scorer' from Run 1 persists in SessionStore after Run 2!")
+    # Layer 1 - SessionStore (Redis) merge leak
+    layer1_sessionstore = "readme_scorer" in session_state_after_run2
+
+    # Layer 2a - ContextManager cached_results accumulation across reviews
+    layer2_accumulation = _has_tool_result(result_2["cached_results"], "readme_scorer")
+
+    # Layer 2b - ContextManager stale cache hit: market_analyzer never re-executed on Run 2
+    layer2_market_stale = market_analyzer.calls == 1
+
+    def flag(hit: bool) -> str:
+        return "[X] STALE" if hit else "[ ] clean"
+
+    print(
+        f"{flag(layer1_sessionstore)}  Layer 1 (SessionStore): "
+        f"'readme_scorer' from Run 1 still in persisted state for '{profile_id}'"
+    )
+    print(
+        f"{flag(layer2_accumulation)}  Layer 2a (ContextManager): "
+        f"'readme_scorer' from Run 1 still in Run 2 cached_results"
+    )
+    print(
+        f"{flag(layer2_market_stale)}  Layer 2b (ContextManager): "
+        f"'market_analyzer' served a stale cache hit (executed {market_analyzer.calls}x total, "
+        f"expected 2 if it recomputed)"
+    )
+
+    if layer1_sessionstore and layer2_accumulation and layer2_market_stale:
+        print("\n[BUG REPRODUCED SUCCESSFULLY]")
+        print("Both caching layers leak prior-review state into subsequent reviews:")
+        print("  - SessionStore: run() loads state by profile_id and merges new results on top,")
+        print("    so keys from a previous review are never cleared.")
         print(
-            f"Details: Session state key for '{profile_id}' contains: {list(session_state_after_run2.keys())}"
+            "  - ContextManager: created once per Orchestrator (not per review), so cached_results"
         )
-        print(
-            "Reason: Orchestrator passes profile_id directly as session_id to SessionStore.get()/set(),"
-        )
-        print(
-            "        so session_state is loaded from the previous review and merged with new results."
-        )
+        print("    accumulate and market_analyzer's constant input yields a stale memoized result.")
         return 0
-    else:
-        print("[BUG NOT REPRODUCED]")
-        print("Session state was clean for Run 2.")
-        return 1
+
+    print("\n[BUG NOT REPRODUCED]")
+    print("One or more layers were clean for Run 2 (expected after the fix lands).")
+    return 1
 
 
 if __name__ == "__main__":
