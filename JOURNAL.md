@@ -32,6 +32,76 @@ Ran `scripts/reproduce_issue_43.py`, which drives `Orchestrator.run()` twice for
 **Blockers or open questions:**
 The fix must clear **both** cache layers — the Redis `SessionStore` and the in-memory `ContextManager` (`orchestrator.py:29`/`:75`, with `market_analyzer` at `:130`); a Redis-only fix is partial. Also confirm whether wiring `Orchestrator` into the production review pipeline (`core/services/review_service.py::_run_agent_orchestration` is currently a placeholder) is in scope for #43 — assuming not; the fix is verified via the repro script and a new unit test.
 
+## Week 9 — Solution building & PR submission
+
+### Check-in 1 (mid-week)
+
+**Current progress:**
+All five PLAN.md sub-tasks are implemented, verified, and committed on
+`fix/43-agent-session-state-not-cleared`:
+
+- **Sub-task 1 — SessionStore (Layer 1):** `Orchestrator.run()` no longer loads and
+  merges the prior review's state; it now clears the key and persists only the current
+  run's results (`delete()` + `set()`). Commit `6f98d8c` (`fix(agent)`). The pre-commit
+  hooks reformatted the previously non-compliant `orchestrator.py`, so that ruff/black
+  churn was isolated in a separate `style(agent)` commit `127f8ca` to keep the fix diff
+  minimal (~6 lines).
+- **Sub-task 2 — ContextManager (Layer 2):** `run()` recreates `self.context_manager`
+  each review, fixing both the `cached_results` accumulation and the `market_analyzer`
+  constant-input stale cache hit. Commit `977483b` (`fix(agent)`).
+- **Sub-task 3 — Regression test:** new `tests/unit/test_orchestrator.py` (4 tests)
+  covering both layers on one reused Orchestrator. Per the Week 8 feedback, the
+  `market_analyzer` check asserts re-execution by a Mock spy's **call count** (== 2),
+  not by output (its constant input makes cached and fresh output identical). Commit
+  `6f1d2f8` (`test(agent)`). Verified it fails 3-of-4 against pre-fix code and passes
+  against the fix.
+- **Sub-task 4 — SessionStore unit test:** new `tests/unit/test_session_store.py`
+  (12 tests) — get/set/delete round-trip, `delete()` removes the key, the
+  `session:<id>` key + 3600s TTL contract, and log-and-swallow on Redis errors. Commit
+  `11b24e1` (`test(agent)`).
+- **Sub-task 5 — Reproduction script:** flipped `scripts/reproduce_issue_43.py` into a
+  fix-verification harness (exit 0 = all layers clean, non-zero = regression). Commit
+  `abd84ee` (`test(agent)`).
+
+Verification: `python scripts/reproduce_issue_43.py` prints `[FIX VERIFIED]` and exits 0
+(all three layers clean; `market_analyzer` executes 2x). `make test-unit` reports
+53 failed / 391 passed — the 16 new #43 tests all pass and the 53 pre-existing failures
+(in unrelated modules) are unchanged.
+
+**Next steps:**
+- Open a **draft PR** against `ascherj/pathreview` using the PR template (Summary, Issue
+  `Closes #43`, Changes, Testing, Notes for Reviewers).
+- Request peer/mentor review in the course Slack channel; address any feedback, then mark
+  the PR ready for review.
+- Fill in Check-in 2 (PR link, tests summary, both self-review boxes) and submit the
+  branch `/tree/fix/43-agent-session-state-not-cleared` URL via the course portal.
+
+**Blockers:**
+None blocking. Noted for the PR: `make check` and `make test-unit` have **extensive
+pre-existing failures unrelated to #43** — `ruff check .` ≈179 errors, `black .` would
+reformat ≈52 files, `mypy` halts on missing third-party stubs (PyPDF2, jose, passlib,
+rank_bm25) plus a numpy/Python-3.13 stub error, and 53 unit tests fail. My four changed
+files are individually clean under ruff/black/mypy and introduce zero new failures, which
+the PR will document per the course's "no new failures" standard.
+
+---
+
+### Check-in 2 (end of week)
+
+**PR link:** [link to your submitted pull request]
+
+**Branch:** [the branch name you worked on, e.g. `fix/123-short-description`]
+
+**What you built:**
+[1–3 sentences summarizing what your fix does and how it works]
+
+**Tests added or updated:**
+[Which test files did you touch? What do they cover?]
+
+**Self-review confirmation:** [ ] make check passes  [ ] make test-unit passes
+
+**Draft PR feedback received from:** [name or Slack handle, or "none"]
+
 ---
 
 ### Part 1 — Understanding the Issue
