@@ -1,17 +1,18 @@
-"""Standalone reproduction script for Issue #43: Agent session state not cleared between reviews.
+"""Verification script for Issue #43: Agent session state not cleared between reviews.
 
-The stale-state leak has TWO independent layers, both reproduced here:
+Originally written to REPRODUCE the bug; now asserts the FIX holds. It drives
+Orchestrator.run() twice for the same profile_id (README-only, then resume-only)
+and checks that neither stale-state layer leaks run 1 into run 2:
 
-  Layer 1 - SessionStore (Redis): Orchestrator.run() loads prior state keyed by
-      `profile_id` and merges the new run's results on top of it, so tool results
-      from an earlier review that aren't recomputed survive into later reviews.
+  Layer 1 - SessionStore (Redis): run() must persist only the current review's
+      results, with no merge of prior state keyed by `profile_id`.
 
-  Layer 2 - ContextManager (in-memory): the ContextManager is created once per
-      Orchestrator instance rather than per review, so (a) `cached_results`
-      accumulates every prior review's results, and (b) `market_analyzer` is
-      always called with the constant input {"detected_skills": {}}, so its
-      memoization key never changes and later reviews get a stale cache hit
-      instead of a fresh execution.
+  Layer 2 - ContextManager (in-memory): reset per review, so (a) `cached_results`
+      do not accumulate across reviews, and (b) `market_analyzer` - always called
+      with the constant input {"detected_skills": {}} - recomputes each review
+      instead of serving a stale memoized result.
+
+Exit code 0 = fix verified (all layers clean); non-zero = a layer regressed.
 """
 
 import importlib.util
@@ -90,7 +91,7 @@ def _has_tool_result(cached_results: dict, tool_name: str) -> bool:
 
 def main() -> int:
     print("=" * 60)
-    print("REPRODUCING ISSUE #43: Session state leak across reviews")
+    print("VERIFYING FIX FOR ISSUE #43: Session state cleared across reviews")
     print("=" * 60)
 
     # 1. Setup mock storage and orchestrator
@@ -166,19 +167,17 @@ def main() -> int:
         f"expected 2 if it recomputed)"
     )
 
-    if layer1_sessionstore and layer2_accumulation and layer2_market_stale:
-        print("\n[BUG REPRODUCED SUCCESSFULLY]")
-        print("Both caching layers leak prior-review state into subsequent reviews:")
-        print("  - SessionStore: run() loads state by profile_id and merges new results on top,")
-        print("    so keys from a previous review are never cleared.")
-        print(
-            "  - ContextManager: created once per Orchestrator (not per review), so cached_results"
-        )
-        print("    accumulate and market_analyzer's constant input yields a stale memoized result.")
+    if not (layer1_sessionstore or layer2_accumulation or layer2_market_stale):
+        print("\n[FIX VERIFIED]")
+        print("Neither caching layer leaks prior-review state into subsequent reviews:")
+        print("  - SessionStore: run() persists only the current review's results,")
+        print("    so keys from a previous review are cleared.")
+        print("  - ContextManager: reset per review, so cached_results do not accumulate")
+        print("    and market_analyzer recomputes instead of serving a stale memoized result.")
         return 0
 
-    print("\n[BUG NOT REPRODUCED]")
-    print("One or more layers were clean for Run 2 (expected after the fix lands).")
+    print("\n[REGRESSION DETECTED]")
+    print("One or more layers leaked prior-review state for Run 2 (see [X] STALE above).")
     return 1
 
 
