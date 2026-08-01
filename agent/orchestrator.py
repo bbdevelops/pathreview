@@ -41,6 +41,10 @@ class Orchestrator:
         """
         logger.info("orchestrator_start", profile_id=profile_id)
 
+        # Start each review with a fresh within-session cache so memoized
+        # results from a prior run() on a reused Orchestrator don't leak in.
+        self.context_manager = ContextManager()
+
         # Build execution plan
         plan = self._build_plan(profile_data)
 
