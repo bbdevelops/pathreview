@@ -88,19 +88,44 @@ the PR will document per the course's "no new failures" standard.
 
 ### Check-in 2 (end of week)
 
-**PR link:** [link to your submitted pull request]
+**PR link:** https://github.com/ascherj/pathreview/pull/512
 
-**Branch:** [the branch name you worked on, e.g. `fix/123-short-description`]
+**Branch:** fix/43-agent-session-state-not-cleared
 
 **What you built:**
-[1–3 sentences summarizing what your fix does and how it works]
+`Orchestrator.run()` was leaking one review's state into the next for the same `profile_id`
+across two independent caches, so a later review could reflect tool results from an earlier
+submission. The fix clears both layers: it stops loading and merging the prior review's
+persisted state and instead writes only the current run's results to the Redis `SessionStore`
+(calling the previously-unused `delete()` before `set()`), and it recreates the in-memory
+`ContextManager` at the top of every `run()` so memoized results — including `market_analyzer`'s
+constant-input result — no longer carry over. Net effect: each review reflects only the current
+submission across both layers.
 
 **Tests added or updated:**
-[Which test files did you touch? What do they cover?]
+Two new unit test files, plus the reproduction script:
+- **`tests/unit/test_orchestrator.py`** — 4 regression tests
+  (`TestOrchestratorClearsStateBetweenReviews`) that run two consecutive reviews (README-only,
+  then resume-only) on a single *reused* Orchestrator and assert no state leaks across either
+  layer: run 2's persisted Redis payload holds only run 2's tools (no `readme_scorer`), run 2's
+  `cached_results` doesn't carry run 1's memoized entries, and `market_analyzer` re-executes each
+  review — asserted by Mock `call_count == 2`, because its constant input makes a cached result
+  and a fresh result identical, so output alone can't distinguish them.
+- **`tests/unit/test_session_store.py`** — 12 unit tests covering `SessionStore`'s get/set/delete
+  round-trip, that `delete()` actually removes the key (the method the fix activates) and is a
+  safe no-op on a missing key, that `set()` overwrites rather than merges, the `session:<id>` key
+  prefix + 3600s default/custom TTL contract, and log-and-swallow behavior on Redis errors and
+  invalid JSON.
+- **`scripts/reproduce_issue_43.py`** — flipped from a bug-demonstration into a fix-verification
+  harness (exit 0 = all layers clean, non-zero = regression).
 
-**Self-review confirmation:** [ ] make check passes  [ ] make test-unit passes
+**Self-review confirmation:** [X] make check passes  [X] make test-unit passes
+*(Per the course rule for codebases with documented pre-existing failures, "passes" = my changes
+introduce no new failures. The four changed files are individually clean under ruff/black/mypy;
+`make test-unit` is unchanged at 53 pre-existing failures / 391 passed, with the 16 new #43 tests
+passing. The pre-existing failures are documented in the PR and in Check-in 1.)*
 
-**Draft PR feedback received from:** [name or Slack handle, or "none"]
+**Draft PR feedback received from:** none
 
 ---
 
