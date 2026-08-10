@@ -127,6 +127,38 @@ passing. The pre-existing failures are documented in the PR and in Check-in 1.)*
 
 **Draft PR feedback received from:** none
 
+## Week 10 — Iteration & reflection
+
+### Reviewer feedback
+
+**Feedback received:** [] Yes  [X] No — still awaiting review
+
+**Summary of feedback:**
+No feedback.
+
+**How you responded:**
+N/A
+
+---
+
+### Reflection
+
+**What was harder than you expected?**
+Navigating the codebase was a bit of a challenge. I'm used to building something on my own or at very least designing the system architecture and using AI. Getting dropped into this codebase and having to orient myself was definitely a struggle.
+Setting up tests was also a little difficult. It wasn't obvious at first what the best way to approach reproducing the issue and testing the solution.
+
+**What did you learn about working in a large codebase?**
+I learned that rushing in and trying to immediately diagnose an issue is probably not the best solution. Taking time to understand how the pieces of the codebase fit together helps alot with keeping track of problems down the road. I also learned that sometimes issues can have more than one cause and you need to be careful about not assuming you have fixed something by addressing one cause.
+
+**How did AI tools help — and where did they fall short?**
+It helped diagnose the initial layer of the bug, but failed (at least at first) to find another more subtle manifestation of the bug. Once it was made aware of the secondary layer of the error it was able to diagnose it and help address it, but on it's own it failed to see the second order issue. AI tools helped with developing a test script as my issue wasn't readily observed by running the existing test suite. 
+
+**What would you do differently if you started over?**
+If I were to do this again I'd likely take more notes as I was going through the code to be able to reference the connection points between files, classes, functions etc. I naively thought I'd be able to just build a mental model of the project and go from there, but that wasn't the best strategy. The issue selection was alright, though it was still a bit of a challenge despite being tier one. The solutions ended up being relatively simple, but I intentionally limited the scope to just addressing the issue as specified. It's likely that there was a bigger issue hidden behind mine that would have required a larger system archtitecture shift to address
+
+**What are you most proud of from this module?**
+Finishing it and surviving the course. More specifically, it was my first time going through this process of developing a PR for an issue, working on it and submitting it, so I'm proud of that. Or at very least I'm happy that I have seen what it's like and know some best practices for how to approach doing this kind of thing in the future. 
+
 ---
 
 ### Part 1 — Understanding the Issue
